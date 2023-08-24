@@ -1,5 +1,6 @@
 from argparse import ArgumentParser
 from json import dumps
+from struct import pack_into
 from typing import Final, Mapping
 
 from aiohttp import web, WSMsgType
@@ -40,6 +41,8 @@ async def create_empty_file(file_path) -> None:
 async def create_meta_file(file_path, data) -> None:
     await create_empty_file(file_path)
     await Path(file_path).write_text(data)
+
+
 # Endpoints
 routes = web.RouteTableDef()
 
@@ -90,6 +93,10 @@ async def store_performance_to_disk(request) -> web.Response:
 async def websocket_echo(request) -> web.WebSocketResponse:
     print('New websocket connection')
     ws = web.WebSocketResponse(max_msg_size=request.app['maximum_websocket_payload'])
+    expected_incoming_buffer = bytearray(16)
+    pack_into('<I', expected_incoming_buffer, 0, 0xCAFEBABE)
+    pack_into('<I', expected_incoming_buffer, 4, 0xDEADB00B)
+    pack_into('<I', expected_incoming_buffer, 8, 16)
 
     params: Mapping = request.rel_url.query
     request['mode'] = params['mode'] if 'mode' in params.keys() else 'raw'
@@ -99,21 +106,33 @@ async def websocket_echo(request) -> web.WebSocketResponse:
 
     async for msg in ws:
         match msg.type:
-            case WSMsgType.ERROR:
-                print(f'Websocket connection closed with exception: {ws.exception()}')
-            case WSMsgType.CLOSE:
-                print(f'Websocket server got close frame')
-                break
             case WSMsgType.BINARY:
                 if request['mode'] == 'handshake':
                     print('Starting Handshake')
                     request['handshake'] = True
                     await ws.send_bytes('GM:Studio-Connect\0'.encode())
+                    if msg.data == expected_incoming_buffer:
+                        res = bytearray(12)
+                        pack_into('<I', res, 0, 0xDEAFBEAD)
+                        pack_into('<I', res, 4, 0xF00DBEEB)
+                        pack_into('<I', res, 8, 12)
+
+                        await ws.send_bytes(res)
+                        request['handshake'] = False
+                        print("Handshake succeeded!")
+                    else:
+                        print('Connection terminated!')
+                        break
                 else:
                     print('Starting Echo')
                     # Just send the data back
                     await ws.send_bytes(msg.data)
                     print(msg.data)
+            case WSMsgType.CLOSE:
+                print(f'Websocket server got close frame')
+                break
+            case WSMsgType.ERROR:
+                print(f'Websocket connection closed with exception: {ws.exception()}')
             case _:
                 print('Connection terminated!')
                 break
