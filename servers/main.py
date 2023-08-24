@@ -12,7 +12,6 @@ app['test_path']: Final[Path] = Path('workspace', 'results', 'tests', app['runti
 app['performance_path']: Final[Path] = Path('workspace', 'results', 'performance', app['runtime'])
 app['fail_file']: Final[Path] = Path('workspace', '.fail')
 app['meta_file']: Final[Path] = Path('workspace', '.meta')
-app['handshake']: bool = False
 app['maximum_post_payload']: int = 52428800
 app['maximum_websocket_payload']: int = 1000000  # to disable the size limit use 0
 app['maximum_binary_request_length']: int = 16
@@ -22,7 +21,6 @@ app._client_max_size = app['maximum_post_payload']
 async def ensure_directory_exists(directory_path):
     try:
         await Path.mkdir(directory_path, parents=True, exist_ok=True)
-    # TODO: aiohttp logger here?
     except Exception as err:
         print(f'Error creating directory {directory_path}', err)
     else:
@@ -56,7 +54,7 @@ async def store_test_to_disk(request) -> web.Response:
     filesystem_type: Final[str] = '_sandboxed' if body['isSandboxed'] else ''
 
     file_name: Final[str] = f'{target_name}_{runner_name}{filesystem_type}'
-    file_path: Final[Path] = Path(app['test_path']).with_name(file_name).with_suffix('.json')
+    file_path: Final[Path] = Path(request.app['test_path']).with_name(file_name).with_suffix('.json')
 
     dir_name = await Path(file_path).parent.absolute()
     await ensure_directory_exists(dir_name)
@@ -64,11 +62,11 @@ async def store_test_to_disk(request) -> web.Response:
         await file_path.write_text(dumps(body))
     except Exception:
         print(f"Can't create test file in {file_path}!")
-        await create_empty_file(app['fail_file'])
+        await create_empty_file(request.app['fail_file'])
 
     # TODO: absolute path?
-    data: Final[dict] = {'folder': str(app['test_path']), 'file': str(file_name)}
-    await create_meta_file(app['meta_file'], dumps(data))
+    data: Final[dict] = {'folder': str(request.app['test_path']), 'file': str(file_name)}
+    await create_meta_file(request.app['meta_file'], dumps(data))
 
     return web.Response(text='Tests data stored')
 
@@ -77,14 +75,14 @@ async def store_test_to_disk(request) -> web.Response:
 async def store_performance_to_disk(request) -> web.Response:
     body: Final[dict] = await request.json()
     file_name: Final[str] = f'{body["platformName"]}_{body["runnerName"]}'
-    file_path: Final[Path] = Path(app['performance_path']).with_name(file_name).with_suffix('.json')
+    file_path: Final[Path] = Path(request.app['performance_path']).with_name(file_name).with_suffix('.json')
 
     dir_name = await Path(file_path).parent.absolute()
     await ensure_directory_exists(dir_name)
     try:
         await file_path.write_text(dumps(body))
     except Exception:
-        await create_empty_file(app['fail_file'])
+        await create_empty_file(request.app['fail_file'])
 
     return web.Response(text="Performance data stored")
 
@@ -92,7 +90,7 @@ async def store_performance_to_disk(request) -> web.Response:
 @routes.get('/websockets')
 async def websocket_echo(request) -> web.WebSocketResponse:
     print('New websocket connection')
-    ws = web.WebSocketResponse(max_msg_size=app['maximum_websocket_payload'])
+    ws = web.WebSocketResponse(max_msg_size=request.app['maximum_websocket_payload'])
 
     params = request.rel_url.query
     request['mode']: str = params['mode'] if 'mode' in params.keys() else 'raw'
