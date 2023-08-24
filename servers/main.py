@@ -1,4 +1,4 @@
-from aiohttp import web
+from aiohttp import web, WSMsgType
 from typing import Final
 from json import dumps
 from anyio import Path
@@ -12,6 +12,11 @@ app['test_path']: Final[Path] = Path('workspace', 'results', 'tests', app['runti
 app['performance_path']: Final[Path] = Path('workspace', 'results', 'performance', app['runtime'])
 app['fail_file']: Final[Path] = Path('workspace', '.fail')
 app['meta_file']: Final[Path] = Path('workspace', '.meta')
+app['handshake']: bool = False
+app['maximum_post_payload']: int = 52428800
+app['maximum_websocket_payload']: int = 1000000  # to disable the size limit use 0
+app['maximum_binary_request_length']: int = 16
+app._client_max_size = app['maximum_post_payload']
 
 
 async def ensure_directory_exists(directory_path):
@@ -39,8 +44,6 @@ async def create_meta_file(file_path, data):
 
 
 # Endpoints
-# TODO: Limits https://docs.aiohttp.org/en/stable/web_quickstart.html#file-uploads
-
 routes = web.RouteTableDef()
 
 
@@ -59,7 +62,7 @@ async def store_test_to_disk(request) -> web.Response:
     await ensure_directory_exists(dir_name)
     try:
         await file_path.write_text(dumps(body))
-    except:
+    except Exception:
         print(f"Can't create test file in {file_path}!")
         await create_empty_file(app['fail_file'])
 
@@ -80,15 +83,45 @@ async def store_performance_to_disk(request) -> web.Response:
     await ensure_directory_exists(dir_name)
     try:
         await file_path.write_text(dumps(body))
-    except:
+    except Exception:
         await create_empty_file(app['fail_file'])
 
     return web.Response(text="Performance data stored")
 
 
 @routes.get('/websockets')
-async def websocket_echo(request) -> web.Response:
-    return web.Response(text="Websocket responser")
+async def websocket_echo(request) -> web.WebSocketResponse:
+    print('New websocket connection')
+    ws = web.WebSocketResponse(max_msg_size=app['maximum_websocket_payload'])
+
+    params = request.rel_url.query
+    request['mode']: str = params['mode'] if 'mode' in params.keys() else 'raw'
+    request['handshake']: bool = False
+
+    await ws.prepare(request)
+
+    async for msg in ws:
+        match msg.type:
+            case WSMsgType.ERROR:
+                print(f'Websocket connection closed with exception: {ws.exception()}')
+            case WSMsgType.CLOSE:
+                print(f'Websocket server got close frame')
+                break
+            case WSMsgType.BINARY:
+                if request['mode'] == 'handshake':
+                    print('Starting Handshake')
+                    request['handshake'] = True
+                    await ws.send_bytes('GM:Studio-Connect\0'.encode())
+                else:
+                    print('Starting Echo')
+                    # Just send the data back
+                    await ws.send_bytes(msg.data)
+                    print(msg.data)
+            case _:
+                print('Connection terminated!')
+                break
+
+    return ws
 
 
 app.router.add_routes(routes)
